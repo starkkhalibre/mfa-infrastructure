@@ -1,0 +1,20 @@
+---
+- name: Deploy the primary stack (node 1)
+  community.docker.docker_compose_v2:
+    project_src: "{{ deploy_dir }}"
+    project_name: "{{ project_name }}"
+    files:
+      - docker-compose.primary.yml
+    state: present
+    pull: missing
+  when: inventory_hostname == 'node_1_primary'
+
+- name: Deploy the secondary stack (node 2)
+  community.docker.docker_compose_v2:
+    project_src: "{{ deploy_dir }}"
+    project_name: "{{ project_name }}"
+    files:
+      - docker-compose.secondary.yml
+    state: present
+    pull: missing
+  when: inventory_hostname == 'node_2_secondary'

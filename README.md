@@ -1,63 +1,84 @@
 # 2FA Infrastructure
 
-This project provisions and runs a Multi-Factor Authentication (MFA) stack using Keycloak and PrivacyIDEA. 
+Keycloak + PrivacyIDEA MFA stack running on two hosts with Docker Compose.
+No Swarm: each host runs its own Compose project and they talk over published ports.
+Secrets/certs come from HashiCorp Vault via Ansible (`mise run deploy`).
 
-The environment is managed via [Docker Compose](https://docs.docker.com/compose/) and orchestrated using [Mise](https://mise.jdx.dev/) tasks. Secrets and certificates are retrieved dynamically from HashiCorp Vault via Ansible.
+## Hosts
 
-## Architecture
+| Host | Services |
+|---|---|
+| **node_1_primary** (`192.168.241.45`) | Traefik, MariaDB primary, Keycloak 1, PrivacyIDEA |
+| **node_2_secondary** (`192.168.241.51`) | MariaDB secondary, Keycloak 2, PrivacyIDEA (standby) |
 
-* **Traefik**: Reverse proxy handling HTTP/HTTPS routing.
-* **Keycloak**: Identity and Access Management (IAM) server (version 26+).
-* **PrivacyIDEA**: Two Factor Authentication system.
-* **MariaDB**: Centralized database backend for both Keycloak and PrivacyIDEA.
+## Quick start
+
+```bash
+mise run deploy                 # provision secrets/certs + deploy both hosts
+mise run db:restore <backup>    # load the S3 backup into the primary
+mise run db:seed-secondary          # copy the primary into the secondary + start replication
+```
+
+Check it:
+
+```bash
+mise run ps                     # containers on both hosts
+```
+
+Access:
+
+* Keycloak — https://keycloak-mfa.crosswired.me
+* PrivacyIDEA — https://pi-mfa.crosswired.me
+* Traefik dashboard — http://192.168.241.45:8080
+
+## Common commands
+
+| Command | What it does |
+|---|---|
+| `mise run deploy` | Provision + deploy both hosts |
+| `mise run ps` | List containers on both hosts |
+| `mise run logs:keycloak1` / `logs:keycloak2` | Keycloak logs |
+| `mise run logs:privacyidea` | PrivacyIDEA logs |
+| `mise run logs:mariadb-primary` / `logs:mariadb-secondary` | MariaDB logs |
+| `mise run logs:traefik` | Traefik logs |
+| `mise run stop` / `restart` / `down` | Stop / restart / remove both stacks |
+| `mise run pull` | Pull images on both hosts |
+| `mise run db:export` | Back up all databases to `databases/` |
+| `mise run db:restore <file>` | Restore a backup into the primary |
+| `mise run db:seed-secondary` | Seed the secondary from the primary |
+| `mise run destroy` | Remove stacks, volumes, certs, backups |
+
+## Failover / failback
+
+```bash
+mise run db:failover   # promote the secondary and point the apps at it
+mise run db:failback   # revert to the primary
+```
+
+> Failback is only safe if nothing was written to the promoted secondary.
+> Re-running `mise run deploy` resets `ACTIVE_DB_HOST` back to the primary.
+
+## How it works
+
+* `mise run deploy` runs Ansible (in the `ansible-ee` image) which fetches Vault
+  secrets/certs, downloads the S3 backup, and copies only what each host needs
+  to `/opt/docker-compose`, then starts each host's stack.
+* MariaDB primary → secondary replication uses GTID (`scripts/seed-secondary.sh`).
+* The secondary PrivacyIDEA uses the secondary database and is not routed by Traefik.
+  Because the secondary is read-only, it only runs after `mise run db:failover` promotes it.
 
 ## Prerequisites
 
-1. [Docker](https://docs.docker.com/engine/install/) and Docker Compose
-2. [Mise](https://mise.jdx.dev/getting-started.html) installed on the host
-3. Access to HashiCorp Vault for fetching credentials
+* Two hosts with Docker + Compose, SSH access, and passwordless `sudo`.
+* The SSH key in `inventory.yml` (`ansible_ssh_private_key_file`), also exposed
+  as `SSH_KEY` in `.env` for the scripts.
+* [Mise](https://mise.jdx.dev/getting-started.html) + Docker on the control machine.
+* Vault access and `inventory.yml` filled in.
 
-## Quick Start
-
-Bring up the entire stack (fetches Vault secrets, generates `.env`, writes certificates, and starts Docker containers):
+## Verify replication
 
 ```bash
-mise run start
-```
-
-### Access URLs
-* **Keycloak**: `https://keycloak-mfa.crosswired.me`
-* **PrivacyIDEA**: `https://pi-mfa.crosswired.me`
-* **Traefik Dashboard**: `http://localhost:8080`
-
-## Available Tasks
-
-Manage the stack easily using `mise run <task>`:
-
-| Task | Description |
-|---|---|
-| `start` | Fetch secrets via Ansible, generate `.env` and certs, start Docker stack |
-| `stop` | Stop all containers gracefully |
-| `down` | Stop and remove containers (keeps volumes intact) |
-| `restart` | Restart all containers |
-| `logs:keycloak` | check keycloak logs |
-| `logs:privacyidea` | check privacyidea logs |
-| `logs:mariadb` | check mariadb logs |
-| `ps` | List running containers |
-| `pull` | Pull latest Docker images |
-| `db:export` | Export a full MariaDB SQL dump into `database/mariadb_backup_<timestamp>.tar.gz` |
-| `db:restore <file>`| Restore MariaDB databases from a `.tar.gz` backup file |
-| `clean` | **DANGER**: Stop stack, delete volumes, DB backups, and remove generated certs |
-
-## Backup and Restore
-
-**Export Database**:
-```bash
-mise run db:export
-```
-This will create a compressed `.tar.gz` backup inside the `database/` directory.
-
-**Restore Database**:
-```bash
-mise run db:restore database/mariadb_backup_20260914_123456.tar.gz
+source .env && source scripts/_remote.sh
+remote_secondary "docker exec mfa-mariadb-secondary mariadb -uroot -p'$MYSQL_ROOT_PASSWORD' -e 'SHOW ALL SLAVES STATUS\G'" |
+grep -E "Slave_IO_Running:|Slave_SQL_Running:|Seconds_Behind_Master:"
 ```

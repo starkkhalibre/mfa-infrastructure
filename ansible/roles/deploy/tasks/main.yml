@@ -1,0 +1,8 @@
+---
+- name: Sync stack artifacts to the node
+  ansible.builtin.include_tasks: sync.yml
+  tags: [sync, deploy]
+
+- name: Deploy the stack from the manager
+  ansible.builtin.include_tasks: stack.yml
+  tags: [stack, deploy]

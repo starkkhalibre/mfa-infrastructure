@@ -1,8 +1,11 @@
 .env
+certs/truststore/root-ca.crt
 certs/*
 !certs/.gitkeep
 !certs/truststore/
 !certs/truststore/.gitkeep
+!config/traefik/.gitkeep
+config/traefik/dynamic.yml
 .ansible
 databases/*tar.gz
 .agents

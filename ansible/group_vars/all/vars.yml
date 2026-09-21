@@ -1,22 +1,22 @@
 ---
+traefik_image: traefik:v3.7.13
+mariadb_image: mariadb:11.8.8
+keycloak_image: quay.io/keycloak/keycloak:26.1.3
+privacyidea_image: khalibre/privacyidea:3.12.2
+
 ansible_hashi_vault_url: https://kms.khalibre.com
 approle_role_id: "{{ vault_approle_role_id }}"
 approle_secret_id: "{{ vault_approle_secret_id }}"
 hcp_vault_cw_common_role_id: "{{ vault_approle_role_id }}"
 hcp_vault_cw_common_secret_id: "{{ vault_approle_secret_id }}"
-vault_cert_mount: certimate
-vault_cert_path: crosswired.me
+cert_mount: certimate
+cert_path: crosswired.me
 cert_dir: '{{ project_dir | default(playbook_dir ~ "/..") }}/certs'
 truststore_dir: '{{ project_dir | default(playbook_dir ~ "/..") }}/certs/truststore'
 
 domain_name: crosswired.me
 keycloak_host: "keycloak-mfa.{{ domain_name }}"
 pi_host: "pi-mfa.{{ domain_name }}"
-
-traefik_image: traefik:v3.6.2
-mariadb_image: mariadb:11.8.8
-keycloak_image: quay.io/keycloak/keycloak:26.1.3
-privacyidea_image: khalibre/privacyidea:3.12.2
 
 traefik_http_port: 80
 traefik_https_port: 443
@@ -42,3 +42,14 @@ pi_pepper: "{{ vault_pi_pepper }}"
 pi_secret_key: "{{ vault_pi_secret_key }}"
 
 root_ca_cert: "{{ vault_root_ca_cert }}"
+
+mariadb_replication_user: "{{ vault_mariadb_replication_user }}"
+mariadb_replication_password: "{{ vault_mariadb_replication_password }}"
+
+deploy_dir: /opt/docker-compose
+project_name: mfa
+primary_node_ip: "{{ hostvars['node_1_primary'].ansible_host }}"
+secondary_node_ip: "{{ hostvars['node_2_secondary'].ansible_host }}"
+ssh_user: "{{ hostvars['node_1_primary'].ansible_user | default('ubuntu') }}"
+active_db_host: "{{ primary_node_ip }}"
+ssh_private_key_file: "{{ lookup('env', 'HOST_HOME') | default(lookup('env', 'HOME'), true) }}/.ssh/jenkins-master.key"

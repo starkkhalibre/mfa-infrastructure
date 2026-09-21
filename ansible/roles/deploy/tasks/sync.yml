@@ -1,0 +1,64 @@
+---
+- name: Ensure the deploy directory exists
+  ansible.builtin.file:
+    path: "{{ deploy_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy environment file
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../.env"
+    dest: "{{ deploy_dir }}/.env"
+    mode: '0600'
+
+- name: Copy certificates
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../certs/"
+    dest: "{{ deploy_dir }}/certs/"
+    mode: preserve
+
+- name: Copy operational scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/"
+    dest: "{{ deploy_dir }}/scripts/"
+    mode: '0755'
+
+- name: Copy Traefik configuration
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../config/traefik/"
+    dest: "{{ deploy_dir }}/config/traefik/"
+    mode: '0644'
+
+- name: Copy primary-only stack files
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - src: "{{ playbook_dir }}/../docker-compose.primary.yml"
+      dest: "{{ deploy_dir }}/docker-compose.primary.yml"
+      mode: '0644'
+    - src: "{{ playbook_dir }}/../config/mariadb/primary.cnf"
+      dest: "{{ deploy_dir }}/config/mariadb/primary.cnf"
+      mode: '0644'
+    - src: "{{ playbook_dir }}/../config/mariadb/initdb/primary/"
+      dest: "{{ deploy_dir }}/config/mariadb/initdb/primary/"
+      mode: '0755'
+    - src: "{{ playbook_dir }}/../databases/"
+      dest: "{{ deploy_dir }}/databases/"
+      mode: '0644'
+  when: inventory_hostname == 'node_1_primary'
+
+- name: Copy secondary-only stack files
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - src: "{{ playbook_dir }}/../docker-compose.secondary.yml"
+      dest: "{{ deploy_dir }}/docker-compose.secondary.yml"
+      mode: '0644'
+    - src: "{{ playbook_dir }}/../config/mariadb/secondary.cnf"
+      dest: "{{ deploy_dir }}/config/mariadb/secondary.cnf"
+      mode: '0644'
+  when: inventory_hostname == 'node_2_secondary'

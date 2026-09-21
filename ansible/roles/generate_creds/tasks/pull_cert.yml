@@ -2,8 +2,8 @@
 - name: Read the wildcard certificate from Vault
   community.hashi_vault.vault_kv2_get:
     url: '{{ ansible_hashi_vault_url }}'
-    engine_mount_point: '{{ vault_cert_mount }}'
-    path: '{{ vault_cert_path }}'
+    engine_mount_point: '{{ cert_mount }}'
+    path: '{{ cert_path }}'
     auth_method: approle
     role_id: '{{ vault_approle_role_id }}'
     secret_id: '{{ vault_approle_secret_id }}'
@@ -39,6 +39,20 @@
     mode: '0600'
   tags: env,get_cert
 
+- name: Ensure Traefik config directory exists
+  ansible.builtin.file:
+    path: "{{ project_dir }}/config/traefik"
+    state: directory
+    mode: '0755'
+  tags: env,get_cert
+
+- name: Render Traefik dynamic configuration
+  ansible.builtin.template:
+    src: traefik-dynamic.yml.j2
+    dest: "{{ project_dir }}/config/traefik/dynamic.yml"
+    mode: '0644'
+  tags: env,get_cert
+
 - name: Ensure truststore directory exists
   ansible.builtin.file:
     path: "{{ truststore_dir | default(project_dir ~ '/certs/truststore') }}"
@@ -53,3 +67,16 @@
     mode: '0644'
   when: root_ca_cert is defined and (root_ca_cert | trim | length > 0)
   tags: certs,get_cert
+- name: Fix ownership of generated files for host user
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: "{{ lookup('env', 'HOST_UID') | default('1000', true) }}"
+    group: "{{ lookup('env', 'HOST_GID') | default('1000', true) }}"
+  loop:
+    - "{{ project_dir }}/.env"
+    - "{{ project_dir }}/config/traefik/dynamic.yml"
+    - "{{ cert_dir | default(project_dir ~ '/certs') }}/wildcard.crt"
+    - "{{ cert_dir | default(project_dir ~ '/certs') }}/wildcard.key"
+    - "{{ truststore_dir | default(project_dir ~ '/certs/truststore') }}/root-ca.crt"
+  ignore_errors: true
+  tags: env,certs,get_cert

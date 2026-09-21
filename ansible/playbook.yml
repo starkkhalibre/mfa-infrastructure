@@ -1,0 +1,17 @@
+---
+- name: Generate secrets, certificates and .env
+  hosts: localhost
+  gather_facts: false
+  vars:
+    project_dir: "{{ playbook_dir }}/.."
+  roles:
+    - role: generate_creds
+      tags: [vault, certs, env]
+
+- name: Deploy the stack
+  hosts: node_1_primary,node_2_secondary
+  gather_facts: true
+  become: true
+  roles:
+    - role: deploy
+      tags: [sync, stack, deploy]

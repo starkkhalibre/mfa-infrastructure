@@ -1,0 +1,5 @@
+[mariadb]
+server_id     = 1
+log_bin       = mysql-bin
+binlog_format = ROW
+bind_address  = 0.0.0.0

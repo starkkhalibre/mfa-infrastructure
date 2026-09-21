@@ -1,0 +1,22 @@
+---
+
+services:
+  ansible-ee:
+    image: khalibre/ansible-ee:2.20.5-2026-5
+    container_name: ansible_deployer
+    user: root
+    volumes:
+      - .:/ansible_project:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/docker-compose:/opt/docker-compose:rw
+      - ${SSH_AUTH_SOCK:-/dev/null}:/ssh-agent
+      - /etc/ansible/.ansible-vault-common.py:/etc/ansible/.ansible-vault-common.py:ro
+    working_dir: /ansible_project
+    environment:
+      - TARGET_HOST=${TARGET_HOST:-localhost}
+      - WORKSPACE=/ansible_project
+      - SSH_AUTH_SOCK=/ssh-agent
+      - ANSIBLE_HOST_KEY_CHECKING=False
+      - HOST_HOME=${HOME}
+      - HOST_UID=${UID:-1000}
+      - HOST_GID=${GID:-1000}
