@@ -9,3 +9,7 @@ databases/export/*tar.gz
 databases/*tar.gz
 .agents
 skills-lock.json
+Dockerfile
+config/privacyidea/keys/encfile
+config/mariadb/conf.d/*.cnf
+!config/mariadb/conf.d/.gitkeep

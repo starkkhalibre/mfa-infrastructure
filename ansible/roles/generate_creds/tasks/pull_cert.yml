@@ -39,6 +39,20 @@
     mode: '0600'
   tags: env,get_cert
 
+- name: Ensure MariaDB config directory exists
+  ansible.builtin.file:
+    path: "{{ mariadb_conf_dir }}"
+    state: directory
+    mode: '0755'
+  tags: env,get_cert
+
+- name: Render MariaDB small VPS config
+  ansible.builtin.template:
+    src: mariadb.cnf.j2
+    dest: "{{ mariadb_conf_dir }}/mariadb.cnf"
+    mode: '0644'
+  tags: env,get_cert
+
 - name: Ensure truststore directory exists
   ansible.builtin.file:
     path: "{{ truststore_dir | default(project_dir ~ '/certs/truststore') }}"
@@ -53,3 +67,18 @@
     mode: '0644'
   when: root_ca_cert is defined and (root_ca_cert | trim | length > 0)
   tags: certs,get_cert
+
+- name: Ensure PrivacyIDEA keys directory exists
+  ansible.builtin.file:
+    path: "{{ pi_keys_dir }}"
+    state: directory
+    mode: '0755'
+  tags: env,get_cert
+
+- name: Render PrivacyIDEA encfile from template
+  ansible.builtin.template:
+    src: encfile.j2
+    dest: "{{ pi_keys_dir }}/encfile"
+    mode: '0644'
+  when: pi_encfile_b64 is defined and (pi_encfile_b64 | trim | length > 0)
+  tags: env,get_cert

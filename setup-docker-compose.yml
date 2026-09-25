@@ -1,0 +1,16 @@
+---
+services:
+  ansible-ee:
+    user: '0:0'
+    image: khalibre/ansible-ee:2.20.5-2026-5
+    container_name: ansible_deployer
+    volumes:
+      - .:/ansible_project:rw
+      - /etc/ansible/.ansible-vault-common.py:/etc/ansible/.ansible-vault-common.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${HOME}/.docker:/root/.docker
+    working_dir: /ansible_project
+    environment:
+      - WORKSPACE=/ansible_project
+      - USER_ID=${UID:-1000}
+      - GROUP_ID=${GID:-1000}

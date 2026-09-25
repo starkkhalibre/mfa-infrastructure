@@ -31,6 +31,33 @@ services:
       mfa-network:
         ipv4_address: 10.100.100.10
 
+  smtp4dev:
+    image: ${SMTP4DEV_IMAGE}
+    container_name: smtp4dev
+    restart: unless-stopped
+    environment:
+      ServerOptions__BasePath: '/'
+      ServerOptions__Urls: 'http://*:80'
+    labels:
+      - 'multifactor-authentication.project=true'
+      - 'traefik.enable=true'
+      - 'traefik.http.middlewares.redirect-middleware.redirectscheme.scheme=https'
+      - 'traefik.http.routers.smtp4dev-secure.entrypoints=websecure'
+      - 'traefik.http.routers.smtp4dev-secure.rule=Host(`${SMTP4DEV_HOST}`)'
+      - 'traefik.http.routers.smtp4dev-secure.service=smtp4dev-secure'
+      - 'traefik.http.routers.smtp4dev-secure.tls=true'
+      - 'traefik.http.routers.smtp4dev.entrypoints=web'
+      - 'traefik.http.routers.smtp4dev.middlewares=redirect-middleware'
+      - 'traefik.http.routers.smtp4dev.rule=Host(`${SMTP4DEV_HOST}`)'
+      - 'traefik.http.routers.smtp4dev.service=smtp4dev'
+      - 'traefik.http.services.smtp4dev-secure.loadbalancer.server.port=80'
+      - 'traefik.http.services.smtp4dev.loadbalancer.server.port=80'
+    depends_on:
+      - 'traefik'
+    volumes:
+      - 'smtp4dev-data:/smtp4dev'
+    networks:
+      - mfa-network
   #
   # MariaDB database (Keycloak + PrivacyIDEA)
   #
@@ -52,6 +79,7 @@ services:
     volumes:
       - 'mariadb-data:/var/lib/mysql'
       - './config/mariadb/initdb:/docker-entrypoint-initdb.d:ro'
+      - './config/mariadb/conf.d:/etc/mysql/conf.d:ro'
     networks:
       - mfa-network
     healthcheck:
@@ -66,12 +94,15 @@ services:
   #
   keycloak:
     image: ${KEYCLOAK_IMAGE}
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: mfa-keycloak
     restart: unless-stopped
     command: start-dev
     environment:
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
       KC_DB: mariadb
       KC_DB_URL_HOST: mariadb
       KC_DB_URL_DATABASE: ${KEYCLOAK_DB_NAME}
@@ -130,8 +161,12 @@ services:
       PI_AUTO_UPDATE: 'false'
       PI_LOGLEVEL: INFO
       PI_SUPERUSER_REALM: ${PI_SUPERUSER_REALM}
+      PI_ENCFILE: /etc/privacyidea/encfile
     volumes:
       - 'privacyidea-data:/data/privacyidea'
+      - './config/privacyidea/keys/encfile:/etc/privacyidea/encfile:ro'
+      - './config/privacyidea/scripts:/mnt/privacyidea/scripts:ro'
+
     labels:
       - 'multifactor-authentication.project=true'
       - 'traefik.enable=true'
@@ -161,3 +196,4 @@ networks:
 volumes:
   mariadb-data:
   privacyidea-data:
+  smtp4dev-data:

@@ -1,0 +1,36 @@
+FROM quay.io/keycloak/keycloak:{{ keycloak_version }} as builder
+
+LABEL maintainer="Infrastructure Services <infrastructure@khalibre.com>" \
+      org.label-schema.name="{{ keycloak_docker_image }}"
+
+ENV KC_DB=mariadb
+ENV KC_HEALTH_ENABLED=true
+ENV KC_METRICS_ENABLED=false
+ENV KC_FEATURES=scripts
+
+ADD --chown=keycloak:keycloak https://github.com/privacyidea/keycloak-provider/releases/download/v{{ privacyidea_provider_version }}/PrivacyIDEA-Keycloak-Provider-{{ privacyidea_provider_version }}.jar /opt/keycloak/providers/PrivacyIDEA-Provider.jar
+
+WORKDIR /opt/keycloak
+RUN /opt/keycloak/bin/kc.sh build
+
+FROM quay.io/keycloak/keycloak:{{ keycloak_version }}
+
+COPY --from=builder /opt/keycloak/ /opt/keycloak/
+
+USER root
+RUN mkdir -p /var/log/keycloak \
+    && chown -R keycloak:keycloak /var/log/keycloak
+USER keycloak
+
+ENV KC_HOSTNAME_STRICT=false
+ENV KC_HTTP_ENABLED=true
+ENV KC_PROXY_HEADERS=xforwarded
+ENV KC_LOG=file,console
+ENV KC_LOG_FILE=/var/log/keycloak/keycloak.log
+ENV KC_LOG_FILE_ASYNC=true
+
+ENV QUARKUS_LOG_FILE_ROTATION_MAX_FILE_SIZE=15M
+ENV QUARKUS_LOG_FILE_ROTATION_MAX_BACKUP_INDEX=35
+ENV QUARKUS_LOG_FILE_ROTATION_FILE_SUFFIX=.yyyy-MM-dd.gz
+
+ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]

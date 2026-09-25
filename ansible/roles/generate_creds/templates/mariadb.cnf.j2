@@ -1,0 +1,12 @@
+[mariadbd]
+skip-name-resolve
+innodb_buffer_pool_size={{ mariadb_innodb_buffer_pool_size }}
+innodb_log_file_size={{ mariadb_innodb_log_file_size }}
+innodb_file_per_table=1
+max_connections={{ mariadb_max_connections }}
+thread_cache_size={{ mariadb_thread_cache_size }}
+table_open_cache={{ mariadb_table_open_cache }}
+tmp_table_size={{ mariadb_tmp_table_size }}
+max_heap_table_size={{ mariadb_max_heap_table_size }}
+character-set-server=utf8mb4
+collation-server=utf8mb4_unicode_ci
