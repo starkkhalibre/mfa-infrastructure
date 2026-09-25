@@ -1,13 +1,17 @@
 ---
 ansible_hashi_vault_url: https://kms.khalibre.com
-approle_role_id: "{{ vault_approle_role_id }}"
-approle_secret_id: "{{ vault_approle_secret_id }}"
-hcp_vault_cw_common_role_id: "{{ vault_approle_role_id }}"
-hcp_vault_cw_common_secret_id: "{{ vault_approle_secret_id }}"
+vault_role_id: "{{ vault_approle_role_id }}"
+vault_secret_id: "{{ vault_approle_secret_id }}"
+
 vault_cert_mount: certimate
 vault_cert_path: crosswired.me
-cert_dir: '{{ project_dir | default(playbook_dir ~ "/..") }}/certs'
-truststore_dir: '{{ project_dir | default(playbook_dir ~ "/..") }}/certs/truststore'
+project_dir: "{{ playbook_dir }}/.."
+cert_dir: '{{ project_dir }}/certs'
+truststore_dir: '{{ project_dir }}/certs/truststore'
+pi_keys_dir: '{{ project_dir }}/config/privacyidea/keys'
+pi_encfile_b64: "{{ vault_pi_encfile_b64 | default('') }}"
+
+
 
 domain_name: crosswired.me
 keycloak_host: "keycloak-mfa.{{ domain_name }}"
@@ -15,8 +19,9 @@ pi_host: "pi-mfa.{{ domain_name }}"
 
 traefik_image: traefik:v3.6.2
 mariadb_image: mariadb:11.8.8
-keycloak_image: quay.io/keycloak/keycloak:26.1.3
+keycloak_image: khalibre/mfa-keycloak:26.1.3-pi-1.8.0
 privacyidea_image: khalibre/privacyidea:3.12.2
+
 
 traefik_http_port: 80
 traefik_https_port: 443

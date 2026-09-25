@@ -1,0 +1,22 @@
+---
+- name: Generate Dockerfile from Jinja2 template
+  ansible.builtin.template:
+    src: templates/Dockerfile.j2
+    dest: "{{ project_dir }}/Dockerfile"
+    mode: '0644'
+  tags: 
+    - build
+    - never
+
+- name: Build Docker image
+  community.docker.docker_image:
+    name: "{{ keycloak_docker_image }}"
+    tag: "{{ app_version }}"
+    source: build
+    build:
+      path: "{{ project_dir }}"
+      pull: true
+    state: present
+  tags: 
+    - build
+    - never

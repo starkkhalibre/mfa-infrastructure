@@ -66,12 +66,15 @@ services:
   #
   keycloak:
     image: ${KEYCLOAK_IMAGE}
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: mfa-keycloak
     restart: unless-stopped
     command: start-dev
     environment:
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
       KC_DB: mariadb
       KC_DB_URL_HOST: mariadb
       KC_DB_URL_DATABASE: ${KEYCLOAK_DB_NAME}
@@ -130,8 +133,12 @@ services:
       PI_AUTO_UPDATE: 'false'
       PI_LOGLEVEL: INFO
       PI_SUPERUSER_REALM: ${PI_SUPERUSER_REALM}
+      PI_ENCFILE: /etc/privacyidea/encfile
     volumes:
       - 'privacyidea-data:/data/privacyidea'
+      - './config/privacyidea/keys/encfile:/etc/privacyidea/encfile:ro'
+      - './config/privacyidea/scripts:/mnt/privacyidea/scripts:ro'
+
     labels:
       - 'multifactor-authentication.project=true'
       - 'traefik.enable=true'

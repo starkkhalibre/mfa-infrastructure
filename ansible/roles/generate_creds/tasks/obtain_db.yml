@@ -1,7 +1,7 @@
 ---
 - name: Generate Vault token
   ansible.builtin.set_fact:
-    login_data: "{{ lookup('community.hashi_vault.vault_login', url=ansible_hashi_vault_url, auth_method='approle', role_id=hcp_vault_cw_common_role_id, secret_id=hcp_vault_cw_common_secret_id, retries=2) }}"
+    login_data: "{{ lookup('community.hashi_vault.vault_login', url=ansible_hashi_vault_url, auth_method='approle', role_id=vault_role_id, secret_id=vault_secret_id, retries=2) }}"
   no_log: true
   tags: database, get_db
 

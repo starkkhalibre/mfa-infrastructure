@@ -1,0 +1,8 @@
+---
+- hosts: localhost
+  gather_facts: false
+  roles:
+    - role: generate_creds
+      tags: [vault, certs, env]
+    - role: build_image
+      tags: [build]

@@ -8,30 +8,9 @@ run = '''
 set -euo pipefail
 
 # 1. Run Ansible to generate .env, truststore certs, and wildcard TLS cert
-if [ -f playbook.yml ] && [ -f ansible/group_vars/all/vault.yml ]; then
-  ansible_ee="${ANSIBLE_EE_IMAGE:-khalibre/ansible-ee:2.20.2-2026-3}"
-  vault_pass_file="${ANSIBLE_VAULT_PASSWORD_FILE:-/etc/ansible/.ansible-vault-common.py}"
-
-  # Synthesize a passwd entry for the current host user so the container
-  # can resolve UID -> username without needing GID 0 or a writable /etc/passwd.
-  runner_passwd="$(mktemp)"
-  echo "runner:x:$(id -u):$(id -g):runner:/project:/bin/bash" > "${runner_passwd}"
-  trap 'rm -f "${runner_passwd}"' EXIT
-
-  docker run --rm \
-    -u "$(id -u):$(id -g)" \
-    -w /project \
-    -v "$PWD:/project" \
-    -v "${vault_pass_file}:${vault_pass_file}:ro" \
-    -v "${runner_passwd}:/etc/passwd:ro" \
-    -e "ANSIBLE_VAULT_PASSWORD_FILE=${vault_pass_file}" \
-    -e ANSIBLE_ROLES_PATH=/project/ansible/roles \
-    -e HOME=/project \
-    "${ansible_ee}" \
-    ansible-playbook playbook.yml \
-      -e @ansible/group_vars/all/vars.yml \
-      -e @ansible/group_vars/all/vault.yml \
-      -e project_dir=/project
+if [ -f ansible/playbook.yml ] && [ -f ansible/group_vars/all/vault.yml ]; then
+  docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+    ansible-playbook ansible/playbook.yml --tags vault,certs,env
 fi
 
 # 2. Source environment and bring up stack
@@ -45,18 +24,20 @@ echo "Traefik:     http://localhost:${TRAEFIK_DASHBOARD_PORT}"
 echo "--------------------------------------------------------"
 
 # 3. Notify user about manual DB restore
-db_file="databases/mariadb_backup_20260914_164148.tar.gz"
-if [ -f "$db_file" ]; then
+latest_db="$(ls -t databases/*.tar.gz 2>/dev/null | head -n1 || true)"
+if [ -n "$latest_db" ] && [ -f "$latest_db" ]; then
   echo ""
-  echo "=> A database backup was downloaded from S3 to:"
-  echo "   $db_file"
+  echo "=> A database backup is available at:"
+  echo "   $latest_db"
   echo "=> To restore this backup into MariaDB, run:"
-  echo "   mise run db:restore $db_file"
+  echo "   mise run db:restore $latest_db"
 fi
 '''
 [tasks."start:services"]
 description = "Start docker compose"
 run = "docker compose up -d"
+
+
 
 [tasks.down]
 description = "Stop and remove the stack (keeps volumes)"
@@ -119,7 +100,6 @@ set -euo pipefail
 docker compose down -v
 rm -f certs/wildcard.crt certs/wildcard.key certs/truststore/*.crt
 rm -rf databases/*.tar.gz
-rm -rf databases/export/*.tar.gz
 echo "Removed stack, volumes, generated certificates, and database backups."
 '''
 
@@ -127,31 +107,61 @@ echo "Removed stack, volumes, generated certificates, and database backups."
 description = "Start Keycloak service"
 run = "docker compose up -d keycloak"
 
+[tasks."build:keycloak"]
+description = "Build custom Keycloak image with PrivacyIDEA provider via Ansible"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags build
+'''
+
 [tasks."start:privacyidea"]
 description = "Start PrivacyIDEA service"
 run = "docker compose up -d privacyidea"
 
 [tasks."db:export"]
-description = "Export MariaDB application databases to a compressed tar.gz file"
+description = "Take a full physical MariaDB backup (mariabackup) of the entire data directory"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 set -a; source .env; set +a
+
+if ! docker exec mfa-mariadb sh -c 'command -v mariabackup >/dev/null 2>&1'; then
+  echo "Error: 'mariabackup' not found in mfa-mariadb (image: ${MARIADB_IMAGE})."
+  echo "This image may not include the mariadb-backup package."
+  exit 1
+fi
+
 mkdir -p databases/export
 timestamp=$(date +"%Y%m%d_%H%M%S")
-sqlfile="mariadb_backup_${timestamp}.sql"
-tarfile="databases/export/mariadb_backup_${timestamp}.tar.gz"
-echo "Exporting databases: ${KEYCLOAK_DB_NAME} ${PI_DB_NAME}..."
-docker exec mfa-mariadb mariadb-dump -uroot -p"${MYSQL_ROOT_PASSWORD}" \
-  --databases "${KEYCLOAK_DB_NAME}" "${PI_DB_NAME}" > "databases/export/${sqlfile}"
+backup_dir="/tmp/mariabackup_${timestamp}"
+tarfile="databases/export/mariadb_fullbackup_${timestamp}.tar.gz"
+
+echo "Taking full physical backup..."
+docker exec mfa-mariadb mariabackup \
+  --backup \
+  --target-dir="${backup_dir}" \
+  --user=root \
+  --password="${MYSQL_ROOT_PASSWORD}"
+
+echo "Preparing backup (applying redo logs so it's restore-ready)..."
+docker exec mfa-mariadb mariabackup \
+  --prepare \
+  --target-dir="${backup_dir}"
+
 echo "Compressing to ${tarfile}..."
-tar -czvf "${tarfile}" -C databases/export "${sqlfile}"
-rm "databases/export/${sqlfile}"
-echo "Export complete: ${tarfile}"
+docker exec mfa-mariadb tar -czf "${backup_dir}.tar.gz" -C "$(dirname "${backup_dir}")" "$(basename "${backup_dir}")"
+docker cp "mfa-mariadb:${backup_dir}.tar.gz" "${tarfile}"
+
+echo "Cleaning up temp files inside container..."
+docker exec mfa-mariadb rm -rf "${backup_dir}" "${backup_dir}.tar.gz"
+
+echo "Full backup complete: ${tarfile}"
 '''
 
 [tasks."db:restore"]
-description = "Restore MariaDB application databases from a compressed tar.gz file (defaults to the latest in databases/)"
+description = "Restore MariaDB databases from a compressed tar.gz file (supports both mariabackup and SQL dumps)"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
@@ -174,26 +184,69 @@ if [ ! -f "${infile}" ]; then
   exit 1
 fi
 
-echo "Restoring databases from ${infile}..."
-tmp_sql="$(mktemp --suffix=.sql)"
-trap 'rm -f "${tmp_sql}"' EXIT
-tar -xzvOf "${infile}" > "${tmp_sql}"
+echo "Inspecting backup format in ${infile}..."
+is_physical="false"
+if tar -ztf "${infile}" 2>/dev/null | grep -E "xtrabackup_checkpoints|backup-my.cnf" | head -n1 | grep -q .; then
+  is_physical="true"
+fi
 
-for db in "${KEYCLOAK_DB_NAME}" "${PI_DB_NAME}"; do
-  echo "  -> restoring ${db} (system tables always skipped)..."
-  docker exec -i mfa-mariadb mariadb -uroot -p"${MYSQL_ROOT_PASSWORD}" --one-database "${db}" < "${tmp_sql}"
-done
-echo "Restore complete."
+if [ "${is_physical}" = "true" ]; then
+  echo "Detected physical backup (mariabackup)."
+  
+  backup_entry=$(tar -ztf "${infile}" 2>/dev/null | awk -F/ 'NR==1{print $1}')
+  
+  echo "Stopping services..."
+  docker compose stop keycloak privacyidea mariadb || true
 
-echo "Resyncing healthcheck credentials..."
-docker exec mfa-mariadb rm -f /var/lib/mysql/.my-healthcheck.cnf
-docker restart mfa-mariadb
+  echo "Restoring physical backup directly to MariaDB volume..."
+  docker run --rm \
+    -v multifactor-authentication_mariadb-data:/var/lib/mysql \
+    -v "$(readlink -f "${infile}"):/tmp/backup.tar.gz:ro" \
+    "${MARIADB_IMAGE}" \
+    bash -c "
+      set -euo pipefail
+      echo 'Extracting backup archive...'
+      mkdir -p /tmp/mariabackup_restore
+      tar -xzf /tmp/backup.tar.gz -C /tmp/mariabackup_restore
+      
+      target_dir=\"/tmp/mariabackup_restore\"
+      if [ -d \"/tmp/mariabackup_restore/${backup_entry}\" ]; then
+        target_dir=\"/tmp/mariabackup_restore/${backup_entry}\"
+      fi
 
-echo "Waiting for mfa-mariadb to report healthy..."
+      echo 'Emptying existing data directory...'
+      find /var/lib/mysql -mindepth 1 -delete
+
+      echo 'Copying backup files...'
+      mariabackup --copy-back --target-dir=\"\${target_dir}\"
+
+      echo 'Setting ownership...'
+      chown -R mysql:mysql /var/lib/mysql
+      rm -rf /tmp/mariabackup_restore
+    "
+
+  echo "Starting MariaDB container..."
+  docker compose start mariadb
+
+else
+  echo "Detected logical SQL backup."
+  tmp_sql="$(mktemp --suffix=.sql)"
+  trap 'rm -f "${tmp_sql}"' EXIT
+  tar -xzvOf "${infile}" > "${tmp_sql}"
+
+  for db in "${KEYCLOAK_DB_NAME}" "${PI_DB_NAME}"; do
+    echo "  -> restoring ${db} (system tables always skipped)..."
+    docker exec -i mfa-mariadb mariadb -uroot -p"${MYSQL_ROOT_PASSWORD}" --one-database "${db}" < "${tmp_sql}"
+  done
+fi
+
+echo "Restore complete. Waiting for mfa-mariadb to report healthy..."
 for i in $(seq 1 30); do
   status="$(docker inspect mfa-mariadb 2>/dev/null | jq -r '.[0].State.Health.Status // "starting"')"
   if [ "${status}" = "healthy" ]; then
     echo "mfa-mariadb is healthy."
+    echo "Restarting application services..."
+    docker compose start keycloak privacyidea || true
     exit 0
   fi
   sleep 2
@@ -201,3 +254,4 @@ done
 
 echo "Warning: mfa-mariadb did not report healthy within 60s — check 'docker logs mfa-mariadb'."
 '''
+

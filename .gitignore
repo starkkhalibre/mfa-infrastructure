@@ -9,3 +9,5 @@ databases/export/*tar.gz
 databases/*tar.gz
 .agents
 skills-lock.json
+Dockerfile
+config/privacyidea/keys/encfile

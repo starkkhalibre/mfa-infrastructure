@@ -51,6 +51,7 @@ Manage the stack easily using `mise run <task>`:
 | `start:mariadb` | Start an existing, stopped MariaDB container |
 | `start:pi` | Start an existing, stopped PrivacyIDEA container |
 | `start:privacyidea` | Start (or create) the PrivacyIDEA container |
+| `build:keycloak` | Build custom Keycloak image with PrivacyIDEA provider via Ansible |
 | `down` | Stop and remove containers (keeps volumes intact) |
 | `restart` | Restart all containers |
 | `logs:keycloak` | check keycloak logs |
