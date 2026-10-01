@@ -1,0 +1,37 @@
+---
+- name: Ensure local node configuration directory exists
+  ansible.builtin.file:
+    path: "{{ rendered_project_dir }}/config/pxc"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: Render node-specific .env locally
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/roles/generate_creds/templates/.env.j2"
+    dest: "{{ rendered_project_dir }}/.env"
+    mode: '0644'
+  vars:
+    node_id: "{{ hostvars[inventory_hostname]['node_id'] | default(1) }}"
+    node1_ip: "{{ hostvars['node1']['ansible_host'] }}"
+    node2_ip: "{{ hostvars['node2']['ansible_host'] }}"
+    node_ip: "{{ hostvars[inventory_hostname]['ansible_host'] }}"
+    pxc_node_address: "{{ hostvars[inventory_hostname]['ansible_host'] }}"
+    pxc_client_host: "{{ hostvars[inventory_hostname]['ansible_host'] }}"
+    keycloak_node_address: "{{ hostvars[inventory_hostname]['ansible_host'] }}"
+    pxc_cluster_join: "{{ hostvars['node1']['ansible_host'] if inventory_hostname == 'node2' else '' }}"
+    pi_skip_bootstrap: "{{ hostvars[inventory_hostname]['pi_skip_bootstrap'] | default(false) }}"
+  delegate_to: localhost
+
+- name: Render node-specific database config
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ rendered_project_dir }}/config/pxc/{{ item.dest }}"
+    mode: '0644'
+  vars:
+    node_id: "{{ node_id | default(1) }}"
+    node_ip: "{{ ansible_host }}"
+  loop:
+    - { src: init.cnf.j2,   dest: init.cnf }
+    - { src: pxc-custom.cnf.j2, dest: custom.cnf }
+  delegate_to: localhost

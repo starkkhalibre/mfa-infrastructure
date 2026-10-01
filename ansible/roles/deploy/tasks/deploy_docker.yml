@@ -1,0 +1,68 @@
+---
+- name: Docker Hub authentication
+  become: true
+  community.docker.docker_login:
+    username: "{{ docker_repo_username }}"
+    password: "{{ docker_repo_password }}"
+    timeout: 60
+  no_log: true
+  tags: [deploy]
+
+- name: Deploy stack with docker compose
+  become: true
+  community.docker.docker_compose_v2:
+    project_src: "{{ remote_project_dir }}"
+    state: present
+    pull: always
+    build: always
+    services: "{{ compose_services | default(omit) }}"
+  tags: [deploy]
+
+- name: Wait for PXC container to report healthy
+  become: true
+  community.docker.docker_container_info:
+    name: mfa-pxc
+  register: pxc_wait_info
+  until:
+    - pxc_wait_info.exists
+    - pxc_wait_info.container.State.Health.Status | default('') == 'healthy'
+  retries: 240
+  delay: 5
+  when: compose_services is not defined or 'pxc' in compose_services
+  tags: [pxc_wait]
+
+- name: Wait for local PXC wsrep state to be Synced
+  become: true
+  community.docker.docker_container_exec:
+    container: mfa-pxc
+    command: mysql -uroot -Nse "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+    env:
+      MYSQL_PWD: "{{ mysql_root_password }}"
+  register: pxc_wait_wsrep_state
+  until:
+    - pxc_wait_wsrep_state.rc == 0
+    - (pxc_wait_wsrep_state.stdout.split() | last | default('')) == 'Synced'
+  retries: 240
+  delay: 5
+  changed_when: false
+  when: compose_services is not defined or 'pxc' in compose_services
+  tags: [pxc_wait]
+
+- name: Wait for Keycloak readiness endpoint
+  become: true
+  community.docker.docker_container_exec:
+    container: mfa-keycloak
+    command: >-
+      bash -ec '
+      exec 3<>/dev/tcp/127.0.0.1/9000;
+      printf "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3;
+      IFS= read -r -t 5 status <&3;
+      [[ "$status" == *" 200 "* ]]
+      '
+  register: keycloak_wait_http
+  until: keycloak_wait_http.rc == 0
+  retries: 240
+  delay: 5
+  changed_when: false
+  when: compose_services is not defined or 'keycloak' in compose_services
+  tags: [keycloak_wait]

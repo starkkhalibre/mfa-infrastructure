@@ -27,7 +27,7 @@
     mode: '0755'
   tags: database, get_db
 
-- name: List MariaDB backup objects in S3
+- name: List database backup objects in S3
   amazon.aws.s3_object:
     region: 'ap-southeast-1'
     aws_access_key: '{{ aws_creds.data.data.access_key }}'
@@ -43,7 +43,7 @@
     latest_db_backup: "{{ db_backup_list.s3_keys | select('match', '^mfa-db-backup/.*\\.tar\\.gz$') | sort | last }}"
   tags: database, get_db
 
-- name: Obtain latest MariaDB database backup
+- name: Obtain latest database backup
   amazon.aws.s3_object:
     region: 'ap-southeast-1'
     aws_access_key: '{{ aws_creds.data.data.access_key }}'
@@ -54,4 +54,3 @@
     overwrite: different
     dest: '{{ project_dir }}/databases/{{ latest_db_backup | basename }}'
   tags: database, get_db
-

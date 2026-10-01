@@ -4,15 +4,14 @@
     src: templates/Dockerfile.j2
     dest: "{{ project_dir }}/Dockerfile"
     mode: '0644'
-  tags: 
-    - build
-    - never
+  tags: [render, build, copy, sync]
 
 - name: Build Docker image
   community.docker.docker_image:
     name: "{{ keycloak_docker_image }}"
     tag: "{{ app_version }}"
     source: build
+    force_source: true
     build:
       path: "{{ project_dir }}"
       pull: true

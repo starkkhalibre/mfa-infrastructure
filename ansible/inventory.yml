@@ -3,3 +3,21 @@ all:
   hosts:
     localhost:
       ansible_connection: local
+  children:
+    cluster:
+      hosts:
+        node1:
+          ansible_host: 192.168.241.42
+          ansible_user: ubuntu
+          node_id: 1
+          pxc_cluster_join: ""
+          pi_skip_bootstrap: false
+        node2:
+          ansible_host: 192.168.241.48
+          ansible_user: ubuntu
+          node_id: 2
+          pxc_cluster_join: "{{ hostvars['node1']['ansible_host'] }}"
+          pi_skip_bootstrap: true
+      vars:
+        ansible_python_interpreter: auto
+

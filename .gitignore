@@ -4,6 +4,8 @@ certs/*
 certs/truststore/
 !certs/truststore/.gitkeep
 .ansible
+config/pxc/custom.cnf
+config/pxc/init.cnf
 !databases/export/.gitkeep
 databases/export/*tar.gz
 databases/*tar.gz

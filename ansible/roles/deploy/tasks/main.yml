@@ -1,0 +1,12 @@
+---
+- name: Render node-specific files locally
+  ansible.builtin.import_tasks: render.yml
+  tags: [render, copy, sync]
+
+- name: Sync project to nodes
+  ansible.builtin.import_tasks: sync.yml
+  tags: [copy, sync]
+
+- name: Deploy Compose services and wait for readiness
+  ansible.builtin.include_tasks: deploy_docker.yml
+  tags: [deploy, pxc_wait, keycloak_wait]

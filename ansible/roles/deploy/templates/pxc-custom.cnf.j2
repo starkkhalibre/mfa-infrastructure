@@ -1,0 +1,46 @@
+[mysqld]
+# --- Galera / PXC ---
+pxc_strict_mode = PERMISSIVE
+pxc-encrypt-cluster-traffic = OFF    
+ssl = OFF
+
+binlog_format = ROW                  
+default_storage_engine = InnoDB       
+innodb_autoinc_lock_mode = 2         
+
+wsrep_provider = /usr/lib64/galera4/libgalera_smm.so
+wsrep_cluster_name = mfa-pxc-cluster
+wsrep_sst_method = xtrabackup-v2
+
+# Per-node values (template these, one file per node)
+wsrep_node_name = pxc-{{ inventory_hostname }}
+wsrep_node_address = {{ node_ip }}:4567
+wsrep_node_incoming_address = {{ node_ip }}:3306
+wsrep_sst_receive_address = {{ node_ip }}:4444
+
+wsrep_provider_options = "ist.recv_addr={{ node_ip }}:4568;gcache.size=256M;gcs.fc_limit=256;gcs.fc_factor=0.9"
+wsrep_applier_threads = 4
+wsrep_retry_autocommit = 4
+
+# --- Charset ---
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# --- Memory (fits a 3G container limit) ---
+innodb_buffer_pool_size = 1G
+innodb_log_buffer_size = 32M
+tmp_table_size = 64M
+max_heap_table_size = 64M
+table_open_cache = 2000
+performance_schema = OFF              
+
+# --- Durability / IO ---
+innodb_flush_log_at_trx_commit = 2   
+innodb_flush_method = O_DIRECT
+innodb_redo_log_capacity = 512M
+innodb_io_capacity = 1000             
+sync_binlog = 0
+
+# --- Connections ---
+max_connections = 400
+skip_name_resolve = ON

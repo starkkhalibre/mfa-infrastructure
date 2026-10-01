@@ -1,0 +1,3 @@
+---
+remote_project_dir: /opt/mfa-infrastructure
+cluster_ssh_user: "{{ vault_cluster_ssh_user | default('ubuntu') }}"

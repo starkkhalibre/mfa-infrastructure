@@ -1,111 +1,148 @@
 [env]
 _.file = ".env"
 
-[tasks.start]
-description = "Prepare all prerequisites (Ansible) and start stack"
+[tasks.sync]
+description = "Sync project files and render node-specific config on all cluster nodes"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags vault,certs,env,copy
+'''
+
+[tasks."sync:node1"]
+description = "Sync project files and render node1 config"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags vault,certs,env,copy -l localhost,node1
+'''
+
+[tasks."sync:node2"]
+description = "Sync project files and render node2 config"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags vault,certs,env,copy -l localhost,node2
+'''
+
+[tasks."deploy:node1"]
+description = "Start/update remote services on node1"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags deploy -l node1
+'''
+
+[tasks."deploy:node2"]
+description = "Start/update remote services on node2"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags deploy -l node2
+'''
+
+[tasks."deploy:cluster"]
+description = "Sync and deploy the two-node cluster in bootstrap/join order"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 1. Run Ansible to generate .env, truststore certs, and wildcard TLS cert
-if [ -f ansible/playbook.yml ] && [ -f ansible/group_vars/all/vault.yml ]; then
-  docker compose -f setup-docker-compose.yml run --rm ansible-ee \
-    ansible-playbook ansible/playbook.yml --tags vault,certs,env
-fi
+echo "Generating Vault-backed environment and certificates on controller..."
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags vault,certs,env
 
-# 2. Source environment and bring up stack
-set -a; source .env; set +a
-docker compose up -d
+echo "Syncing project files and rendering node-specific config..."
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags copy
 
-echo "--------------------------------------------------------"
-echo "Keycloak:    https://${KEYCLOAK_HOST}"
-echo "PrivacyIDEA: https://${PI_HOST}"
-echo "Traefik:     http://localhost:${TRAEFIK_DASHBOARD_PORT}"
-echo "--------------------------------------------------------"
+echo "Starting node1 bootstrap services (PXC, Traefik, Keycloak)..."
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags deploy -l node1 \
+    -e '{"compose_services":["pxc","traefik","keycloak"]}'
 
-# 3. Notify user about manual DB restore
-latest_db="$(ls -t databases/*.tar.gz 2>/dev/null | head -n1 || true)"
-if [ -n "$latest_db" ] && [ -f "$latest_db" ]; then
-  echo ""
-  echo "=> A database backup is available at:"
-  echo "   $latest_db"
-  echo "=> To restore this backup into MariaDB, run:"
-  echo "   mise run db:restore $latest_db"
-fi
+echo "Waiting for node1 PXC to become healthy and Synced..."
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags pxc_wait -l node1
+
+echo "Waiting for node1 Keycloak readiness before starting PrivacyIDEA..."
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags keycloak_wait -l node1
+
+echo "Starting remaining services on node1..."
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags deploy -l node1
+
+echo "Starting services on node2..."
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags deploy -l node2
+
+echo "Verifying two-node cluster health..."
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags cluster_verify
 '''
-[tasks."start:services"]
-description = "Start docker compose"
-run = "docker compose up -d"
 
+[tasks."cluster:status"]
+description = "Show container and PXC status on both nodes"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags cluster_status
+'''
 
-
-[tasks.down]
-description = "Stop and remove the stack (keeps volumes)"
-run = "docker compose down"
-
-[tasks.stop]
-description = "Stop the stack"
-run = "docker compose stop"
-
-[tasks."stop:keycloak"]
-description = "Stop keycloak"
-run = "docker compose stop keycloak"
-
-[tasks."stop:mariadb"]
-description = "Stop mariadb"
-run = "docker compose stop mariadb"
-
-[tasks."stop:pi"]
-description = "Stop privacy-idea"
-run = "docker compose stop privacyidea"
-
-[tasks."start:mariadb"]
-description = "start mariadb"
-run = "docker compose start mariadb"
-
-[tasks."start:pi"]
-description = "start privacy-idea"
-run = "docker compose start privacyidea"
-
-[tasks.restart]
-description = "Restart the stack"
-run = "docker compose restart"
-
-[tasks."logs:keycloak"]
-description = "Follow keycloak logs"
-run = "docker logs -f mfa-keycloak"
-
-[tasks."logs:privacyidea"]
-description = "Follow privacyidea logs"
-run = "docker logs -f mfa-privacyidea"
-
-[tasks."logs:mariadb"]
-description = "Follow mariadb logs"
-run = "docker logs -f mfa-mariadb"
+[tasks."cluster:verify"]
+description = "Fail if either node or the two-node PXC cluster is unhealthy"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible-playbook ansible/playbook.yml --tags cluster_verify
+'''
 
 [tasks.ps]
-description = "List stack containers"
-run = "docker compose ps"
-
-[tasks.pull]
-description = "Pull all images"
-run = "docker compose pull"
-
-[tasks.destroy]
-description = "Stop and remove the stack, volumes, generated certificates, and database backups"
-alias = "clean"
+description = "List stack containers on both cluster nodes"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-docker compose down -v
-rm -f certs/wildcard.crt certs/wildcard.key certs/truststore/*.crt
-rm -rf databases/*.tar.gz
-echo "Removed stack, volumes, generated certificates, and database backups."
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible cluster -i ansible/inventory.yml -m ansible.builtin.shell \
+    -a "sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'"
 '''
 
-[tasks."start:keycloak"]
-description = "Start Keycloak service"
-run = "docker compose up -d keycloak"
+[tasks."logs:keycloak"]
+description = "Show recent Keycloak logs on both cluster nodes"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible cluster -i ansible/inventory.yml -m ansible.builtin.shell \
+    -a "sudo docker logs --tail=200 mfa-keycloak 2>&1"
+'''
+
+[tasks."logs:privacyidea"]
+description = "Show recent PrivacyIDEA logs on both cluster nodes"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible cluster -i ansible/inventory.yml -m ansible.builtin.shell \
+    -a "sudo docker logs --tail=200 mfa-privacyidea 2>&1"
+'''
+
+[tasks."logs:pxc"]
+description = "Show recent PXC logs on both cluster nodes"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+docker compose -f setup-docker-compose.yml run --rm ansible-ee \
+  ansible cluster -i ansible/inventory.yml -m ansible.builtin.shell \
+    -a "sudo docker logs --tail=200 mfa-pxc 2>&1"
+'''
 
 [tasks."build:keycloak"]
 description = "Build custom Keycloak image with PrivacyIDEA provider via Ansible"
@@ -116,65 +153,68 @@ docker compose -f setup-docker-compose.yml run --rm ansible-ee \
   ansible-playbook ansible/playbook.yml --tags build
 '''
 
-[tasks."start:privacyidea"]
-description = "Start PrivacyIDEA service"
-run = "docker compose up -d privacyidea"
-
 [tasks."db:export"]
-description = "Take a full physical MariaDB backup (mariabackup) of the entire data directory"
+description = "Take a full physical PXC backup into databases/export"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 set -a; source .env; set +a
 
-if ! docker exec mfa-mariadb sh -c 'command -v mariabackup >/dev/null 2>&1'; then
-  echo "Error: 'mariabackup' not found in mfa-mariadb (image: ${MARIADB_IMAGE})."
-  echo "This image may not include the mariadb-backup package."
+backup_tool="mariabackup"
+if ! docker exec mfa-pxc sh -c 'command -v mariabackup >/dev/null 2>&1'; then
+  if docker exec mfa-pxc sh -c 'command -v xtrabackup >/dev/null 2>&1'; then
+    backup_tool="xtrabackup"
+  else
+    echo "Error: neither 'mariabackup' nor 'xtrabackup' was found in mfa-pxc (image: ${PXC_IMAGE})."
+    exit 1
+  fi
+fi
+
+if ! docker exec mfa-pxc sh -c 'command -v tar >/dev/null 2>&1'; then
+  echo "Error: 'tar' not found in mfa-pxc (image: ${PXC_IMAGE})."
   exit 1
 fi
 
 mkdir -p databases/export
 timestamp=$(date +"%Y%m%d_%H%M%S")
-backup_dir="/tmp/mariabackup_${timestamp}"
-tarfile="databases/export/mariadb_fullbackup_${timestamp}.tar.gz"
+backup_dir="/tmp/pxc_backup_${timestamp}"
+tarfile="databases/export/pxc_fullbackup_${timestamp}.tar.gz"
 
 echo "Taking full physical backup..."
-docker exec mfa-mariadb mariabackup \
+docker exec mfa-pxc "${backup_tool}" \
   --backup \
   --target-dir="${backup_dir}" \
   --user=root \
   --password="${MYSQL_ROOT_PASSWORD}"
 
-echo "Preparing backup (applying redo logs so it's restore-ready)..."
-docker exec mfa-mariadb mariabackup \
+echo "Preparing backup..."
+docker exec mfa-pxc "${backup_tool}" \
   --prepare \
   --target-dir="${backup_dir}"
 
 echo "Compressing to ${tarfile}..."
-docker exec mfa-mariadb tar -czf "${backup_dir}.tar.gz" -C "$(dirname "${backup_dir}")" "$(basename "${backup_dir}")"
-docker cp "mfa-mariadb:${backup_dir}.tar.gz" "${tarfile}"
-
-echo "Cleaning up temp files inside container..."
-docker exec mfa-mariadb rm -rf "${backup_dir}" "${backup_dir}.tar.gz"
+docker exec mfa-pxc tar -czf "${backup_dir}.tar.gz" -C "$(dirname "${backup_dir}")" "$(basename "${backup_dir}")"
+docker cp "mfa-pxc:${backup_dir}.tar.gz" "${tarfile}"
+docker exec mfa-pxc rm -rf "${backup_dir}" "${backup_dir}.tar.gz"
 
 echo "Full backup complete: ${tarfile}"
 '''
 
 [tasks."db:restore"]
-description = "Restore MariaDB databases from a compressed tar.gz file (supports both mariabackup and SQL dumps)"
+description = "Restore PXC databases from a compressed tar.gz file"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 set -a; source .env; set +a
 
 if [ $# -eq 0 ]; then
-  infile="$(ls -t databases/*.tar.gz 2>/dev/null | head -n1)"
+  infile="$(ls -t databases/*.tar.gz databases/export/*.tar.gz 2>/dev/null | head -n1 || true)"
   if [ -z "${infile}" ]; then
-    echo "Error: No backup file given and none found in databases/"
+    echo "Error: No backup file given and none found in databases/ or databases/export/"
     echo "Usage: mise run db:restore [backup_file.tar.gz]"
     exit 1
   fi
-  echo "No file specified — using most recent backup: ${infile}"
+  echo "No file specified; using most recent backup: ${infile}"
 else
   infile="$1"
 fi
@@ -191,43 +231,41 @@ if tar -ztf "${infile}" 2>/dev/null | grep -E "xtrabackup_checkpoints|backup-my.
 fi
 
 if [ "${is_physical}" = "true" ]; then
-  echo "Detected physical backup (mariabackup)."
-  
-  backup_entry=$(tar -ztf "${infile}" 2>/dev/null | awk -F/ 'NR==1{print $1}')
-  
-  echo "Stopping services..."
-  docker compose stop keycloak privacyidea mariadb || true
+  backup_entry="$(tar -ztf "${infile}" 2>/dev/null | awk -F/ 'NR==1{print $1}')"
+  restore_image="${PXC_IMAGE}"
 
-  echo "Restoring physical backup directly to MariaDB volume..."
+  if docker run --rm "${restore_image}" sh -c 'command -v mariabackup >/dev/null 2>&1'; then
+    restore_tool="mariabackup"
+  elif docker run --rm "${restore_image}" sh -c 'command -v xtrabackup >/dev/null 2>&1'; then
+    restore_tool="xtrabackup"
+  else
+    echo "Error: neither 'mariabackup' nor 'xtrabackup' was found in ${restore_image}."
+    exit 1
+  fi
+
+  echo "Stopping local services..."
+  docker compose stop keycloak privacyidea pxc || true
+
+  echo "Restoring physical backup directly to local PXC volume..."
   docker run --rm \
-    -v multifactor-authentication_mariadb-data:/var/lib/mysql \
+    -v multifactor-authentication_pxc-data:/var/lib/mysql \
     -v "$(readlink -f "${infile}"):/tmp/backup.tar.gz:ro" \
-    "${MARIADB_IMAGE}" \
+    "${restore_image}" \
     bash -c "
       set -euo pipefail
-      echo 'Extracting backup archive...'
-      mkdir -p /tmp/mariabackup_restore
-      tar -xzf /tmp/backup.tar.gz -C /tmp/mariabackup_restore
-      
-      target_dir=\"/tmp/mariabackup_restore\"
-      if [ -d \"/tmp/mariabackup_restore/${backup_entry}\" ]; then
-        target_dir=\"/tmp/mariabackup_restore/${backup_entry}\"
+      mkdir -p /tmp/pxc_restore
+      tar -xzf /tmp/backup.tar.gz -C /tmp/pxc_restore
+      target_dir=\"/tmp/pxc_restore\"
+      if [ -d \"/tmp/pxc_restore/${backup_entry}\" ]; then
+        target_dir=\"/tmp/pxc_restore/${backup_entry}\"
       fi
-
-      echo 'Emptying existing data directory...'
       find /var/lib/mysql -mindepth 1 -delete
-
-      echo 'Copying backup files...'
-      mariabackup --copy-back --target-dir=\"\${target_dir}\"
-
-      echo 'Setting ownership...'
+      ${restore_tool} --copy-back --target-dir=\"\${target_dir}\"
       chown -R mysql:mysql /var/lib/mysql
-      rm -rf /tmp/mariabackup_restore
+      rm -rf /tmp/pxc_restore
     "
 
-  echo "Starting MariaDB container..."
-  docker compose start mariadb
-
+  docker compose start pxc
 else
   echo "Detected logical SQL backup."
   tmp_sql="$(mktemp --suffix=.sql)"
@@ -235,23 +273,21 @@ else
   tar -xzvOf "${infile}" > "${tmp_sql}"
 
   for db in "${KEYCLOAK_DB_NAME}" "${PI_DB_NAME}"; do
-    echo "  -> restoring ${db} (system tables always skipped)..."
-    docker exec -i mfa-mariadb mariadb -uroot -p"${MYSQL_ROOT_PASSWORD}" --one-database "${db}" < "${tmp_sql}"
+    echo "  -> restoring ${db}"
+    docker exec -i mfa-pxc mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" --one-database "${db}" < "${tmp_sql}"
   done
 fi
 
-echo "Restore complete. Waiting for mfa-mariadb to report healthy..."
-for i in $(seq 1 30); do
-  status="$(docker inspect mfa-mariadb 2>/dev/null | jq -r '.[0].State.Health.Status // "starting"')"
+echo "Restore complete. Waiting for local mfa-pxc to report healthy..."
+for _ in $(seq 1 30); do
+  status="$(docker inspect mfa-pxc 2>/dev/null | jq -r '.[0].State.Health.Status // "starting"')"
   if [ "${status}" = "healthy" ]; then
-    echo "mfa-mariadb is healthy."
-    echo "Restarting application services..."
     docker compose start keycloak privacyidea || true
+    echo "mfa-pxc is healthy."
     exit 0
   fi
   sleep 2
 done
 
-echo "Warning: mfa-mariadb did not report healthy within 60s — check 'docker logs mfa-mariadb'."
+echo "Warning: mfa-pxc did not report healthy within 60s; check 'docker logs mfa-pxc'."
 '''
-

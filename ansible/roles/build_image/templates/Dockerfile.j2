@@ -3,7 +3,7 @@ FROM quay.io/keycloak/keycloak:{{ keycloak_version }} as builder
 LABEL maintainer="Infrastructure Services <infrastructure@khalibre.com>" \
       org.label-schema.name="{{ keycloak_docker_image }}"
 
-ENV KC_DB=mariadb
+ENV KC_DB=mysql
 ENV KC_HEALTH_ENABLED=true
 ENV KC_METRICS_ENABLED=false
 ENV KC_FEATURES=scripts

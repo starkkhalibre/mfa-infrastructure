@@ -19,6 +19,8 @@ services:
       - '--providers.docker.exposedbydefault=false'
       - '--providers.docker.constraints=Label(`multifactor-authentication.project`,`true`)'
       - '--providers.file.directory=/etc/traefik/dynamic'
+      - '--ping=true'
+      - '--ping.entrypoint=web'
     ports:
       - '${TRAEFIK_HTTP_PORT}:80'
       - '${TRAEFIK_HTTPS_PORT}:443'
@@ -28,16 +30,22 @@ services:
       - './config/traefik:/etc/traefik/dynamic:ro'
       - './certs:/certs:ro'
     networks:
-      mfa-network:
-        ipv4_address: 10.100.100.10
+      - mfa-network
 
   #
-  # MariaDB database (Keycloak + PrivacyIDEA)
+  # Percona XtraDB Cluster database (Keycloak + PrivacyIDEA)
   #
-  mariadb:
-    image: ${MARIADB_IMAGE}
-    container_name: mfa-mariadb
+  pxc:
+    image: ${PXC_IMAGE:-percona/percona-xtradb-cluster:8.0}
+    entrypoint: ['/bin/bash', '/usr/local/bin/pxc-entrypoint.sh']
+    command: ['mysqld']
+    container_name: mfa-pxc
     restart: unless-stopped
+    network_mode: host
+    deploy:
+      resources:
+        limits: { memory: 3G }
+        reservations: { memory: 1.5G }
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${KEYCLOAK_DB_NAME}
@@ -46,19 +54,23 @@ services:
       PI_DB_NAME: ${PI_DB_NAME}
       PI_DB_USER: ${PI_DB_USER}
       PI_DB_PASSWORD: ${PI_DB_PASSWORD}
-      MARIADB_AUTO_UPGRADE: 1
-    ports:
-      - '${MARIADB_PORT}:3306'
+      CLUSTER_NAME: ${PXC_CLUSTER_NAME:-mfa-pxc-cluster}
+      CLUSTER_JOIN: ${PXC_CLUSTER_JOIN:-}
+      XTRABACKUP_PASSWORD: ${PXC_SST_PASSWORD:-sstpassword123}
     volumes:
-      - 'mariadb-data:/var/lib/mysql'
-      - './config/mariadb/initdb:/docker-entrypoint-initdb.d:ro'
-    networks:
-      - mfa-network
+      - 'pxc-data:/var/lib/mysql'
+      - './config/bin/pxc-entrypoint.sh:/usr/local/bin/pxc-entrypoint.sh:ro'
+      - './config/pxc/initdb:/docker-entrypoint-initdb.d:ro'
+      - './config/pxc/custom.cnf:/etc/percona-xtradb-cluster.conf.d/custom.cnf:ro'
+      - './config/pxc/init.cnf:/etc/percona-xtradb-cluster.conf.d/zz-init.cnf:ro'
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test:
+        - CMD-SHELL
+        - 'MYSQL_PWD="$${MYSQL_ROOT_PASSWORD}" mysql --protocol=TCP -h 127.0.0.1 -uroot --connect-timeout=3 -Nse "SELECT 1"'
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 20m
 
   #
   # Keycloak
@@ -71,26 +83,39 @@ services:
       dockerfile: Dockerfile
     container_name: mfa-keycloak
     restart: unless-stopped
-    command: start-dev
+    entrypoint: ['/bin/bash', '-ec']
+    command:
+      - |
+        /usr/local/bin/wait-for-tcp.sh ${PXC_CLIENT_HOST:?PXC_CLIENT_HOST is required} 3306 120
+        exec /opt/keycloak/bin/kc.sh start --optimized
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
-      KC_DB: mariadb
-      KC_DB_URL_HOST: mariadb
+      KC_DB: mysql
+      KC_DB_URL: jdbc:mysql://${PXC_CLIENT_HOST:?PXC_CLIENT_HOST is required}:3306/${KEYCLOAK_DB_NAME}?nullCatalogMeansCurrent=true
       KC_DB_URL_DATABASE: ${KEYCLOAK_DB_NAME}
       KC_DB_USERNAME: ${KEYCLOAK_DB_USER}
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
       KC_PROXY_HEADERS: xforwarded
       KC_HOSTNAME: ${KEYCLOAK_HOST}
       KC_HOSTNAME_STRICT: 'false'
+      KC_HEALTH_ENABLED: 'true'
+      KC_CACHE: ispn
+      KC_CACHE_STACK: jdbc-ping
+      JAVA_OPTS_APPEND: "-Djgroups.external_addr=${KEYCLOAK_NODE_ADDRESS:?KEYCLOAK_NODE_ADDRESS is required} -Djgroups.fd.external_addr=${KEYCLOAK_NODE_ADDRESS:?KEYCLOAK_NODE_ADDRESS is required}"
       KC_TRUSTSTORE_PATHS: /opt/keycloak/certs/truststore/root-ca.crt
+    ports:
+      - '7800:7800'
+      - '57800:57800'
     ##
     # Add extra hosts for keycloak to resolve to the adfs server
     ##
     extra_hosts:
+      - "host.docker.internal:host-gateway"
       - "Window-Server-22.khalibre-ad-lab.crosswired.me:192.168.241.49"
     volumes:
       - './certs/truststore:/opt/keycloak/certs/truststore:ro'
+      - './config/bin/wait-for-tcp.sh:/usr/local/bin/wait-for-tcp.sh:ro'
     labels:
       - 'multifactor-authentication.project=true'
       - 'traefik.enable=true'
@@ -108,7 +133,7 @@ services:
     networks:
       - mfa-network
     depends_on:
-      mariadb:
+      pxc:
         condition: service_healthy
 
   #
@@ -119,25 +144,30 @@ services:
     image: ${PRIVACYIDEA_IMAGE}
     container_name: mfa-privacyidea
     restart: unless-stopped
+    entrypoint: ['/bin/bash', '-ec']
+    command:
+      - |
+        /usr/local/bin/wait-for-tcp.sh ${PXC_CLIENT_HOST:?PXC_CLIENT_HOST is required} 3306 120
+        exec /usr/bin/tini -- /usr/local/bin/privacyidea_entrypoint.sh
     environment:
-      PI_DB_VENDOR: mariadb
-      PI_DB_HOST: mariadb
-      PI_DB_NAME: ${PI_DB_NAME}
-      PI_DB_USER: ${PI_DB_USER}
-      PI_DB_PASSWORD: ${PI_DB_PASSWORD}
+      PI_DB_VENDOR: mysql
+      PI_DB_URL: jdbc:mysql://${PXC_CLIENT_HOST:?PXC_CLIENT_HOST is required}:3306/${PI_DB_NAME}?nullCatalogMeansCurrent=true
       PI_PEPPER: ${PI_PEPPER}
       PI_SECRET_KEY: ${PI_SECRET_KEY}
       PI_ADMIN_USER: ${PI_ADMIN_USER}
       PI_ADMIN_PASSWORD: ${PI_ADMIN_PASSWORD}
-      PI_SKIP_BOOTSTRAP: ${PI_SKIP_BOOTSTRAP}
+      PI_SKIP_BOOTSTRAP: ${PI_SKIP_BOOTSTRAP:-false}
       PI_AUTO_UPDATE: 'false'
       PI_LOGLEVEL: INFO
       PI_SUPERUSER_REALM: ${PI_SUPERUSER_REALM}
       PI_ENCFILE: /etc/privacyidea/encfile
     volumes:
-      - 'privacyidea-data:/data/privacyidea'
+      - './config/privacyidea/keys:/data/privacyidea/keys'
       - './config/privacyidea/keys/encfile:/etc/privacyidea/encfile:ro'
       - './config/privacyidea/scripts:/mnt/privacyidea/scripts:ro'
+      - './config/bin/wait-for-tcp.sh:/usr/local/bin/wait-for-tcp.sh:ro'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
     labels:
       - 'multifactor-authentication.project=true'
@@ -156,15 +186,12 @@ services:
     networks:
       - mfa-network
     depends_on:
-      mariadb:
+      pxc:
         condition: service_healthy
 
 networks:
   mfa-network:
-    ipam:
-      config:
-        - subnet: 10.100.100.0/24
+    driver: bridge
 
 volumes:
-  mariadb-data:
-  privacyidea-data:
+  pxc-data:

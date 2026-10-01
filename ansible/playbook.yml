@@ -5,4 +5,8 @@
     - role: generate_creds
       tags: [vault, certs, env]
     - role: build_image
-      tags: [build]
+
+- hosts: cluster
+  gather_facts: false
+  roles:
+    - role: deploy

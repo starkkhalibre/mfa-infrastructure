@@ -1,0 +1,5 @@
+remote_project_dir: /opt/mfa-infrastructure
+rendered_project_dir: "{{ project_dir }}/.ansible/rendered/{{ inventory_hostname }}"
+pxc_data_volume: multifactor-authentication_pxc-data
+pxc_seed_backup_dir: "{{ remote_project_dir }}/databases/export"
+pxc_seed_backup_glob: "{{ pxc_seed_backup_dir }}/pxc_fullbackup_*.tar.gz"

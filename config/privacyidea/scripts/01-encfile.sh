@@ -1,4 +1,3 @@
 #!/bin/bash
-# Prevent create_enckey from running since we mount a static encfile
-mkdir -p /data/privacyidea/keys
-touch /data/privacyidea/keys/encfile
+# Keep the existing static encfile; PrivacyIDEA owns audit-key generation.
+test -f /data/privacyidea/keys/encfile
